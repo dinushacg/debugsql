@@ -1,0 +1,211 @@
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from app.benchmark_registry import find_benchmark_gold_sql, get_schema_context
+from app.config import get_settings
+from app.gemini import GeminiService, OpenAICompatibleService
+from app.gemini.schemas import GeminiConfigError, QueryPlanParseError
+from app.simple_nl2sql import build_simple_schema_nl2sql
+from app.tools.schemas import DatasetContext
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ResolvedSQL:
+    sql: str | None
+    explanation: str
+    provider: str
+    answer: str | None = None
+    assumptions: tuple[str, ...] = ()
+    tables_used: tuple[str, ...] = ()
+    confidence: float | None = None
+    clarifying_question: str | None = None
+    conversation_mode: str = "new_query"
+    used_context: bool = False
+
+
+def resolve_sql_for_message(
+    message: str,
+    context: DatasetContext,
+    schema: dict[str, Any] | None = None,
+    working_state: dict[str, Any] | None = None,
+    conversation_history: list[dict[str, Any]] | None = None,
+) -> ResolvedSQL:
+    """Resolve NL questions to SQL using the same provider priority as the plan pipeline."""
+    if schema is None and context.dbType == "sqlite_benchmark" and context.benchmark and context.dbId:
+        schema = get_schema_context(context.benchmark, context.dbId)
+
+    llm_available = _should_use_llm()
+    if llm_available:
+        resolved = _resolve_with_llm(message, schema, working_state, conversation_history)
+        if resolved:
+            return resolved
+        if working_state:
+            # The refine attempt came back empty even though the LLM is configured.
+            # Retry once as a standalone question so a self-contained request still
+            # resolves instead of dead-ending on a clarify message.
+            logger.warning("llm_refine_returned_empty; retrying as a standalone query.")
+            resolved = _resolve_with_llm(message, schema, None, conversation_history)
+            if resolved:
+                return resolved
+
+    if working_state:
+        if llm_available:
+            return ResolvedSQL(
+                sql=None,
+                explanation="The configured SQL assistant did not return a usable refinement.",
+                provider="none",
+                answer=(
+                    "I tried to continue the previous query, but the SQL assistant did not return "
+                    "a usable update. Please retry, or restate the full query as a standalone question."
+                ),
+                clarifying_question="Can you restate the complete query you want to run?",
+                conversation_mode="clarify",
+                used_context=False,
+            )
+        return ResolvedSQL(
+            sql=None,
+            explanation="Multi-turn refinement requires a configured LLM SQL provider.",
+            provider="none",
+            answer=(
+                "I can continue a previous query only when the SQL assistant is configured. "
+                "Please restate the full query as a standalone question."
+            ),
+            clarifying_question="Can you restate the complete query you want to run?",
+            conversation_mode="clarify",
+            used_context=False,
+        )
+
+    if context.benchmark and context.dbId:
+        gold_sql = find_benchmark_gold_sql(context.benchmark, context.dbId, message)
+        if gold_sql:
+            return ResolvedSQL(
+                sql=gold_sql,
+                explanation=f"Matched a known {context.benchmark} benchmark question.",
+                provider="gold_sql",
+                answer="I found a matching benchmark question and prepared its reference SQL.",
+            )
+
+    # Craigslist questions may require NL_FILTER and image joins. The simple
+    # single-table fallback cannot preserve those semantics, so failing the
+    # LLM request must not silently produce a different query.
+    if schema and context.dbType != "craigslist":
+        fallback = build_simple_schema_nl2sql(message, schema)
+        if fallback:
+            has_filters = bool(fallback.intent_ir.get("filters"))
+            if not needs_real_nl2sql(message) or has_filters:
+                return ResolvedSQL(
+                    sql=fallback.sql,
+                    explanation=fallback.explanation,
+                    provider="simple_fallback",
+                    answer="I prepared a simple schema-aware SQL query for this question.",
+                )
+
+    if context.dbType == "craigslist":
+        return ResolvedSQL(
+            sql=None,
+            explanation="The configured SQL assistant did not return usable Craigslist semantic SQL.",
+            provider="none",
+            answer=(
+                "I could not prepare a reliable image-aware query for Craigslist. "
+                "Please retry; no fallback SQL was generated because it could change the meaning of your request."
+            ),
+            conversation_mode="clarify",
+        )
+
+    return ResolvedSQL(sql=None, explanation="", provider="none")
+
+
+def needs_real_nl2sql(message: str) -> bool:
+    """Return True when a single-table demo fallback would likely misread the question."""
+    text = message.lower().strip()
+    if re.search(r"""['"].+['"]""", message):
+        return True
+    if re.search(r"\b(where|named|called|specific|filter|join|whose|belonging to)\b", text):
+        return True
+    if re.search(r"\b(is|are|equals?|equal to)\s+[\w]", text):
+        return True
+    if re.search(r"\b(by|for|from|with)\s+(the\s+)?(artist|author|customer|user|player|team)\b", text):
+        return True
+    return False
+
+
+def _should_use_llm() -> bool:
+    settings = get_settings()
+    provider = settings.query_plan_provider.strip().lower()
+    if provider == "gemini":
+        return bool(settings.gemini_api_key.strip())
+    if provider == "openai_compatible":
+        return bool(settings.llm_api_key.strip() and settings.llm_api_base_url.strip())
+    return False
+
+
+def _resolve_with_llm(
+    message: str,
+    schema: dict[str, Any] | None,
+    working_state: dict[str, Any] | None = None,
+    conversation_history: list[dict[str, Any]] | None = None,
+) -> ResolvedSQL | None:
+    provider = get_settings().query_plan_provider.strip().lower()
+    if provider == "openai_compatible":
+        service = OpenAICompatibleService()
+    elif provider == "gemini":
+        service = GeminiService()
+    else:
+        logger.warning("Unsupported QUERY_PLAN_PROVIDER=%s; skipping LLM SQL resolution.", provider)
+        return None
+    if not service.is_configured:
+        return None
+    try:
+        logger.warning(
+            "llm_sql_resolution_start provider=%s model=%s",
+            provider,
+            get_settings().llm_model if provider == "openai_compatible" else get_settings().gemini_model,
+        )
+        plan = service.generate_query_plan(
+            message,
+            schema,
+            working_state=working_state,
+            conversation_history=conversation_history,
+        )
+    except (GeminiConfigError, QueryPlanParseError, TimeoutError, RuntimeError) as exc:
+        logger.warning("%s SQL resolution failed: %s", provider, exc)
+        return None
+    provider_name = provider
+    if not plan.can_answer:
+        return ResolvedSQL(
+            sql=None,
+            explanation=plan.explanation,
+            provider=provider_name,
+            answer=plan.answer,
+            assumptions=tuple(plan.assumptions),
+            tables_used=tuple(plan.tables_used),
+            confidence=plan.confidence,
+            clarifying_question=plan.clarifying_question,
+            conversation_mode=plan.mode,
+            used_context=bool(working_state and plan.mode == "refine_query"),
+        )
+    if not plan.sql:
+        logger.warning(
+            "%s returned can_answer=True mode=%s but no SQL; dropping result.",
+            provider_name,
+            plan.mode,
+        )
+        return None
+    explanation = plan.explanation.strip() or "Generated from your question and schema."
+    return ResolvedSQL(
+        sql=plan.sql,
+        explanation=explanation,
+        provider=provider_name,
+        answer=plan.answer,
+        assumptions=tuple(plan.assumptions),
+        tables_used=tuple(plan.tables_used),
+        confidence=plan.confidence,
+        conversation_mode=plan.mode,
+        used_context=bool(working_state and plan.mode == "refine_query"),
+    )

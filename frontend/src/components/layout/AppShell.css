@@ -1,0 +1,227 @@
+/* ================================================
+   AppShell – Three-panel root layout
+   Theme: graphite panels, clean borders, refined tabs
+   ================================================ */
+
+.app-shell {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--bg-base);
+  position: relative;
+}
+
+/* ---- Ambient — extremely subtle warmth only ---- */
+.app-shell__bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 120% 50% at 0% 0%,   rgba(107, 143, 191, 0.022) 0%, transparent 55%),
+    radial-gradient(ellipse 80%  70% at 100% 100%, rgba(90, 152, 150, 0.014) 0%, transparent 60%);
+}
+
+/* ---- Left panel ---- */
+.app-shell__left {
+  width: 30%;
+  min-width: 300px;
+  max-width: 440px;
+  height: 100%;
+  border-right: 1px solid var(--border-default);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.28);
+}
+
+/* ---- Right panel container ---- */
+.app-shell__right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding-top: 52px;
+  box-sizing: border-box;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.app-shell__right::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 51px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface);
+}
+
+/* ---- Primary execution workspace ---- */
+.app-shell__execution {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Ensure FadeIn wrappers and direct children fill height correctly */
+.app-shell__left > div,
+.app-shell__execution > div {
+  height: 100%;
+}
+
+.app-shell__capabilities-trigger {
+  margin-left: var(--sp-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
+}
+
+.app-shell__capabilities-trigger:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.app-shell__drawer-backdrop {
+  position: absolute;
+  inset: 52px 0 0;
+  z-index: 20;
+  border: 0;
+  background: rgba(0, 0, 0, 0.48);
+  cursor: default;
+}
+
+.app-shell__capabilities-drawer {
+  position: absolute;
+  top: 52px;
+  right: 0;
+  bottom: 0;
+  z-index: 21;
+  width: min(680px, 55vw);
+  min-width: 460px;
+  overflow: hidden;
+  background: var(--bg-base);
+  border-left: 1px solid var(--border-default);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.38);
+}
+
+.app-shell__capabilities-drawer > div {
+  height: 100%;
+}
+
+@media (max-width: 900px) {
+  .app-shell__capabilities-drawer {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* ---- Bottom tab container ---- */
+.bottom-tabs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ---- Tab bar ---- */
+.bottom-tabs__bar {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  padding: 0 var(--sp-2);
+  gap: 2px;
+  position: relative;
+}
+
+/* ---- Individual tab button ---- */
+.bottom-tabs__tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 var(--sp-3);
+  height: 28px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color var(--t-fast), background var(--t-fast);
+  white-space: nowrap;
+  overflow: visible;
+}
+
+.bottom-tabs__tab:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover-md);
+}
+
+.bottom-tabs__tab--active {
+  color: var(--text-primary);
+}
+
+.bottom-tabs__tab--active::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-sm);
+  background: var(--bg-hover-md);
+  pointer-events: none;
+}
+
+.bottom-tabs__tab-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.bottom-tabs__tab-label {
+  flex-shrink: 0;
+}
+
+/* Active underline — clean single-color bar, no glow */
+.bottom-tabs__tab-indicator {
+  position: absolute;
+  bottom: -3px;
+  left: var(--sp-3);
+  right: var(--sp-3);
+  height: 1.5px;
+  border-radius: var(--r-full) var(--r-full) 0 0;
+  background: var(--accent-blue);
+}
+
+/* ---- Panel content area ---- */
+.bottom-tabs__content {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+  position: relative;
+}
+
+/* Panel transition wrapper */
+.bottom-tabs__panel {
+  position: absolute;
+  inset: 0;
+}
